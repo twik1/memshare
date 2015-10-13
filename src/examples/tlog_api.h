@@ -13,8 +13,24 @@
 /* Return Value(s)    : 0 ok                                                 */
 /*                    : 1 a name has to be present                           */
 /*                    : 2 unable to initialize memshare                      */
+/*                    : 3 already initialized                                */
 /*****************************************************************************/
 int tsyslog_init(char *name);
+
+/*****************************************************************************/
+/* Function Name      : tsyslog_prio_init                                    */
+/* Description        : Initializes tlog, sets the syslog tag name and       */
+/*                    : prio mask                                            */
+/* Input(s)           : char* (string 20 char)                               */
+/*                    : int priority                                         */
+/* Output(s)          : None.                                                */
+/* Return Value(s)    : 0 ok                                                 */
+/*                    : 1 a name has to be present                           */
+/*                    : 2 unable to initialize memshare                      */
+/*                    : 3 already initialized                                */
+/*                    : 4 prio not within range                              */
+/*****************************************************************************/
+int tsyslog_prio_init(char *name, int);
 
 /*****************************************************************************/
 /* Function Name      : tsyslog                                              */
@@ -32,8 +48,7 @@ void tsyslog(int, const char *, ...);
 /* Description        : Set a bit in the mask for syslog output              */
 /* Input(s)           : int priority according to syslog.h                   */
 /* Output(s)          : None.                                                */
-/* Return Value(s)    : 0 ok                                                 */
-/*                    : 1 it has to be initalized first                      */
+/* Return Value(s)    : None                                                 */
 /*****************************************************************************/
 int tsyslog_set(int);
 

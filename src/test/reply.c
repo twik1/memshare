@@ -43,9 +43,12 @@ void signal1_callback(char *proc, int value)
 {
 	int retvalue = 0;
 	if (value == 666) {
-		system("./memsend -s1 memshare 8");
-		system("./memsend -s2 memshare 12 24");
-		system("./memsend -s3 memshare 48 96 192");
+		if (system("./memsend -s1 memshare 8") == -1)
+			printf("system cmd failed\n");
+		if (system("./memsend -s2 memshare 12 24") == -1)
+			printf("system cmd failed\n");
+		if (system("./memsend -s3 memshare 48 96 192") == -1)
+			printf("system cmd failed\n");
 		return;
 	}
 	if ((retvalue = signal1(proc, value)))
@@ -76,8 +79,10 @@ int main(int argc, char *argv[])
 
 	if (init_memshare(procname, SHMEMSIZE, QUEUESIZE)) {
 		printf("Failed to init memshare\n");
-		if (strncmp(procname, "number_8", PROC_NAME_SIZE) == 0)
-			system("./memsend -s1 memshare 7");
+		if (strncmp(procname, "number_8", PROC_NAME_SIZE) == 0) {
+			if (system("./memsend -s1 memshare 7") == -1)
+				printf("system cmd failed\n");
+		}
 		exit(1);
 	}
 	data_register(data_callback);

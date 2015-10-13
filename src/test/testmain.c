@@ -347,7 +347,8 @@ int test_seven()
 	 
 	for (i=0;i<9;i++) {
 		snprintf(systemcmd, 25, "./reply number_%d &", i);
-		system(systemcmd);
+		if (system(systemcmd) == -1)
+			printf("system cmd failed\n");
 	}
 	sleep(2);
 	for (i=0;i<8;i++) {
@@ -365,7 +366,8 @@ int test_seven()
 
 int main(int argc, char *argv[])
 {
-	system("./reply reply &");
+	if (system("./reply reply &") == -1)
+		printf("system cmd failed\n");
 	sleep(1);
 
 	if (test_one())

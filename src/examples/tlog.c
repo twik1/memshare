@@ -19,15 +19,20 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
 #include "memshare_api.h"
 #include "tlog_api.h"
 
 #define SHMEMSIZE 50
 #define QUEUESIZE 512
 
-int init = 0;
-int mask = 0;
+int t_init = 0;
+int t_mask = 31;
+ /* Setting all bits up to LOG_WARNING as default */
+
 char tproc[PROC_NAME_SIZE];
+/* we protect the t_mask variable */
+static pthread_mutex_t mask_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void signal2_callback(char *proc, int value1, int value2)
 {
@@ -36,20 +41,26 @@ void signal2_callback(char *proc, int value1, int value2)
 		if ((value2 < 0) || (value2 > 8))
 			return;
 		/* Set a bit in the mask */
-		mask |= (1 << value2);
+		pthread_mutex_lock(&mask_mutex);
+		t_mask |= (1 << value2);
+		pthread_mutex_unlock(&mask_mutex);
 		break;
 
 	case 2:
 		if ((value2 < 0) || (value2 > 8))
 			return;
 		/* Del a bit in the mask */
-		mask &= ~(1 << value2);
+		pthread_mutex_lock(&mask_mutex);
+		t_mask &= ~(1 << value2);
+		pthread_mutex_unlock(&mask_mutex);
 		break;
 
 	case 3:
 		if ((value2 < 0) || (value2 > 255))
 			return;
-		mask = value2;
+		pthread_mutex_lock(&mask_mutex);
+		t_mask = value2;
+		pthread_mutex_unlock(&mask_mutex);
 		break;
 
 	default:
@@ -62,28 +73,25 @@ void signal2_callback(char *proc, int value1, int value2)
 
 int tsyslog_set(int value)
 {
-	if (!init)
+	if (!t_init)
 		return 1;
-	/* use the memshare to skip locks */
-	signal2(tproc, 1, value);
+	signal2_callback("", 1, value);
 	return 0;
 }
 
 int tsyslog_del(int value)
 {
-	if (!init)
+	if (!t_init)
 		return 1;
-	/* use the memshare to skip locks */
-	signal2(tproc, 2, value);
+	signal2_callback("", 2, value);
 	return 0;
 }
 
 int tsyslog_replace(int value)
 {
-	if (!init)
+	if (!t_init)
 		return 1;
-	/* use the memshare to skip locks */
-	signal2(tproc, 3, value);
+	signal2_callback("", 3, value);
 	return 0;
 }
 
@@ -91,16 +99,34 @@ void tsyslog(int priority, const char *fmt, ...)
 {
 	va_list ap;
 
+	if (!t_init)
+		return; /* Not initialized */
 	/* check mask */
-	if (mask & (1 << priority)) {
+	if (t_mask & (1 << priority)) {
 		va_start(ap, fmt);
 		vsyslog(priority, fmt, ap);
 		va_end(ap);
 	}
 }
 
+int tsyslog_prio_init(char *name, int priomask)
+{
+	int retvalue;
+	if (t_init)
+		return 3;
+	if ((priomask < 0) || (priomask > 255))
+		return 4;
+	signal2_callback("", 3, priomask);
+	if ((retvalue = tsyslog_init(name))	!= 0)
+		return retvalue;
+	return 0;
+}
+
 int tsyslog_init(char *name)
 {
+	int oldvalue = 0;
+	if (t_init)
+		return 3;
 	if (name == NULL)
 		return 1;
 	strncpy(tproc, name, (PROC_NAME_SIZE - 1));
@@ -110,9 +136,10 @@ int tsyslog_init(char *name)
 
 	openlog(tproc, LOG_NDELAY | LOG_CONS, LOG_LOCAL0);
 
-	mask = 64; /* Setting bit 6, LOG_INFO to allow info printout */
+	oldvalue = t_mask; /* Store old value, whatever it is */
+	t_mask = 64; /* Setting bit 6, LOG_INFO to allow info printout */
 	tsyslog(LOG_INFO, "Initializing tsyslog\n");
-	mask = 31; /* Setting all bits up to LOG_WARNING as default */
+	t_mask = oldvalue; /* Set back old value */
 
 	/* we don't need much space */
 	if (init_memshare(tproc, SHMEMSIZE, 512) != 0)
@@ -121,6 +148,6 @@ int tsyslog_init(char *name)
 	/* register the callback */
 	signal2_register(signal2_callback);
 
-	init = 1;
+	t_init = 1;
 	return 0;
 }
