@@ -176,7 +176,7 @@ int lo_qadd(int index, char **entry)
 	if (low_top[index] == low_totalsize[index]) {
 		low_top[index] = 0;
 	}
-	if (low_top[index] == low_bottom[index]) {
+	if (low_bottom[index] == low_top[index]) {
 		low_state[index] = FULL;
 	}
 	pthread_mutex_lock(&condition_mutex[index]);
@@ -214,7 +214,7 @@ int hi_qadd(int index, char **entry)
 	if (hi_top[index] == hi_totalsize[index]) {
 		hi_top[index] = 0;
 	}
-	if (hi_top[index] == hi_bottom[index]) {
+	if (hi_bottom[index] == hi_top[index]) {
 		hi_state[index] = FULL;
 	}
 	pthread_mutex_lock(&condition_mutex[index]);
@@ -241,7 +241,7 @@ static char *gethiq(int index)
 	if (hi_bottom[index] == hi_totalsize[index]) {
 		hi_bottom[index] = 0;
 	}
-	if (hi_bottom[index] == hi_top[index]) {
+	if (hi_top[index] == hi_bottom[index]) {
 		hi_state[index] = EMPTY;
 	}
 	return retval;
@@ -262,7 +262,7 @@ static char *getloq(int index)
 	if (low_bottom[index] == low_totalsize[index]) {
 		low_bottom[index] = 0;
 	}
-	if (low_bottom[index] == low_top[index]) {
+	if (low_top[index] == low_bottom[index]) {
 		low_state[index] = EMPTY;
 	}
 	return retval;
