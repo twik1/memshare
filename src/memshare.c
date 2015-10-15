@@ -726,6 +726,9 @@ int data(char *proc, char *data, int len)
 {
 	int index;
 	header hdr;
+
+        memset(&hdr, 0, sizeof(hdr));
+
 	if (!initialized)
 		return 2;
 	if ((index = get_proc_index(proc)) < 0) {
@@ -753,6 +756,9 @@ int signal1(char *proc, int data1)
 	int index;
 	header hdr;
 	signal sig;
+
+        memset(&hdr, 0, sizeof(hdr));
+        memset(&sig, 0, sizeof(sig));
 
 	if (!initialized)
 		return 2;
@@ -782,6 +788,9 @@ int signal2(char *proc, int data1, int data2)
 	header hdr;
 	signal sig;
 
+        memset(&hdr, 0, sizeof(hdr));
+        memset(&sig, 0, sizeof(sig));
+
 	if (!initialized)
 		return 2;
 	if ((index = get_proc_index(proc)) < 0) {
@@ -810,6 +819,9 @@ int signal3(char *proc, int data1, int data2, int data3)
 	int index;
 	header hdr;
 	signal sig;
+
+        memset(&hdr, 0, sizeof(hdr));
+        memset(&sig, 0, sizeof(sig));
 
 	if (!initialized)
 		return 2;
