@@ -27,15 +27,15 @@
 #define SHMEMSIZE 50
 #define QUEUESIZE 512
 
-int t_init = 0;
-int t_mask = 31;
- /* Setting all bits up to LOG_WARNING as default */
+static int t_init = 0;
+static int t_mask = 31;
+/* Setting all bits up to LOG_WARNING as default */
 
-char tproc[PROC_NAME_SIZE];
+static char tproc[PROC_NAME_SIZE];
 /* we protect the t_mask variable */
 static pthread_mutex_t mask_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void signal2_callback(char *proc, int value1, int value2)
+static void signal2_callback(char *proc, int value1, int value2)
 {
 	switch (value1) {
 	case 1:
