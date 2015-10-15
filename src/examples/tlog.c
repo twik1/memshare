@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <unistd.h>
 #include "memshare_api.h"
 #include "tlog_api.h"
 
@@ -100,7 +101,7 @@ void tsyslog(int priority, const char *fmt, ...)
 	va_list ap;
 
 	if (!t_init)
-		return; /* Not initialized */
+		return;		/* Not initialized */
 	/* check mask */
 	if (t_mask & (1 << priority)) {
 		va_start(ap, fmt);
@@ -117,7 +118,7 @@ int tsyslog_prio_init(char *name, int priomask)
 	if ((priomask < 0) || (priomask > 255))
 		return 4;
 	signal2_callback("", 3, priomask);
-	if ((retvalue = tsyslog_init(name))	!= 0)
+	if ((retvalue = tsyslog_init(name)) != 0)
 		return retvalue;
 	return 0;
 }
@@ -125,8 +126,13 @@ int tsyslog_prio_init(char *name, int priomask)
 int tsyslog_init(char *name)
 {
 	int oldvalue = 0;
-	if (t_init)
+	int retvalue = 0;
+	if (t_init) {
+		syslog(LOG_INFO,
+		       "tsyslog_init: Already registered in this process (%d) as %s. You wanted %s.",
+		       getpid(), tproc, name);
 		return 3;
+	}
 	if (name == NULL)
 		return 1;
 	strncpy(tproc, name, (PROC_NAME_SIZE - 1));
@@ -136,15 +142,18 @@ int tsyslog_init(char *name)
 
 	openlog(tproc, LOG_NDELAY | LOG_CONS, LOG_LOCAL0);
 
-	oldvalue = t_mask; /* Store old value, whatever it is */
-	t_mask = 64; /* Setting bit 6, LOG_INFO to allow info printout */
+	oldvalue = t_mask;	/* Store old value, whatever it is */
+	t_mask = 64;		/* Setting bit 6, LOG_INFO to allow info printout */
 	tsyslog(LOG_INFO, "Initializing tsyslog\n");
-	t_mask = oldvalue; /* Set back old value */
+	t_mask = oldvalue;	/* Set back old value */
 
 	/* we don't need much space */
-	if (init_memshare(tproc, SHMEMSIZE, 512) != 0)
+	if ((retvalue = init_memshare(tproc, SHMEMSIZE, 512)) != 0) {
+		syslog(LOG_ERR, "tsyslog_init: init_memshare returned %d",
+		       retvalue);
 		return 2;
-		
+	}
+
 	/* register the callback */
 	signal2_register(signal2_callback);
 
