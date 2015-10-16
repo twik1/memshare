@@ -27,10 +27,19 @@
 #define SHMEMSIZE 50
 #define QUEUESIZE 512
 
-static int t_init = 0;
-static int t_mask = 31;
-/* Setting all bits up to LOG_WARNING as default */
+/*
+ * tlog_mask is a global variable accessible to all users of tsyslog.
+ * It makes it possible to test whether the priority of a log record
+ * is high enough before the format string and arguments are computed.
+ *
+ * The test against tlog_mask is intended to be hidden with a user
+ * defined macro.
+ *
+ * Setting all bits up to LOG_WARNING as default 
+ */
+int tlog_mask = 31;
 
+static int t_init = 0;
 static char tproc[PROC_NAME_SIZE];
 /* we protect the t_mask variable */
 static pthread_mutex_t mask_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -43,7 +52,7 @@ static void signal2_callback(char *proc, int value1, int value2)
 			return;
 		/* Set a bit in the mask */
 		pthread_mutex_lock(&mask_mutex);
-		t_mask |= (1 << value2);
+		tlog_mask |= (1 << value2);
 		pthread_mutex_unlock(&mask_mutex);
 		break;
 
@@ -52,7 +61,7 @@ static void signal2_callback(char *proc, int value1, int value2)
 			return;
 		/* Del a bit in the mask */
 		pthread_mutex_lock(&mask_mutex);
-		t_mask &= ~(1 << value2);
+		tlog_mask &= ~(1 << value2);
 		pthread_mutex_unlock(&mask_mutex);
 		break;
 
@@ -60,7 +69,7 @@ static void signal2_callback(char *proc, int value1, int value2)
 		if ((value2 < 0) || (value2 > 255))
 			return;
 		pthread_mutex_lock(&mask_mutex);
-		t_mask = value2;
+		tlog_mask = value2;
 		pthread_mutex_unlock(&mask_mutex);
 		break;
 
@@ -96,14 +105,15 @@ int tsyslog_replace(int value)
 	return 0;
 }
 
-void tsyslog(int priority, const char *fmt, ...)
+/* internal function to be passed to memshare */
+static void _tsyslog(int priority, const char *fmt, ...)
 {
 	va_list ap;
 
 	if (!t_init)
 		return;		/* Not initialized */
 	/* check mask */
-	if (t_mask & (1 << priority)) {
+	if (tlog_mask & (1 << priority)) {
 		va_start(ap, fmt);
 		vsyslog(priority, fmt, ap);
 		va_end(ap);
@@ -138,14 +148,14 @@ int tsyslog_init(char *name)
 	strncpy(tproc, name, (PROC_NAME_SIZE - 1));
 
 	/* let memshare use tsyslog as well */
-	logfunction_register(tsyslog);
+	logfunction_register(_tsyslog);
 
 	openlog(tproc, LOG_NDELAY | LOG_CONS, LOG_LOCAL0);
 
-	oldvalue = t_mask;	/* Store old value, whatever it is */
-	t_mask = 64;		/* Setting bit 6, LOG_INFO to allow info printout */
+	oldvalue = tlog_mask;	/* Store old value, whatever it is */
+	tlog_mask = 64;		/* Setting bit 6, LOG_INFO to allow info printout */
 	tsyslog(LOG_INFO, "Initializing tsyslog\n");
-	t_mask = oldvalue;	/* Set back old value */
+	tlog_mask = oldvalue;	/* Set back old value */
 
 	/* we don't need much space */
 	if ((retvalue = init_memshare(tproc, SHMEMSIZE, 512)) != 0) {

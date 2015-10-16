@@ -33,22 +33,32 @@ int tsyslog_init(char *name);
 int tsyslog_prio_init(char *name, int);
 
 /*****************************************************************************/
-/* Function Name      : tsyslog                                              */
-/* Description        : Push a string to syslog depending on priority mask   */
-/* Input(s)           : int priority                                         */
-/*                    : char* (string) to be sent to syslog                  */
-/* Output(s)          : None.                                                */
-/* Return Value(s)    : 0 ok                                                 */
-/*                    : 1 it has to be initalized first                      */
+/* variable Name      : tlog_mask                                            */
+/* Description        : bitmask that tells user which log levels are active  */
 /*****************************************************************************/
-void tsyslog(int, const char *, ...);
+extern int tlog_mask;
+
+/*****************************************************************************/
+/* Macro Name         : tsyslog                                              */
+/* Description        : Push a string to syslog depending on priority mask   */
+/* Input(s)           : priority                                             */
+/*                    : args format string and args to be sent to syslog     */
+/* Output(s)          : None.                                                */
+/*****************************************************************************/
+#define tsyslog(priority, args...)              \
+    do {                                        \
+        if (tlog_mask & (1 << priority)) {      \
+            syslog(priority, args);             \
+        }                                       \
+    } while(0)
 
 /*****************************************************************************/
 /* Function Name      : tsyslog_set                                          */
 /* Description        : Set a bit in the mask for syslog output              */
 /* Input(s)           : int priority according to syslog.h                   */
 /* Output(s)          : None.                                                */
-/* Return Value(s)    : None                                                 */
+/* Return Value(s)    : 0 ok                                                 */
+/*                    : 1 it has to be initalized first                      */
 /*****************************************************************************/
 int tsyslog_set(int);
 
