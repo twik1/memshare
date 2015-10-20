@@ -473,7 +473,7 @@ static int add_proc(char *name, int size)
 	if (try_lock1(mem_entry[index].active))
 		print(LOG_DEBUG, "Proc %s is now active at index %d\n", name,
 		      index);
-	strncpy(entry->proc_name, name, PROC_NAME_SIZE);
+	strncpy(entry->proc_name, name, PROC_NAME_SIZE - 1);
 	memcpy(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE);
 	/* signal the entry active to use */
 	entry->active = 1;
