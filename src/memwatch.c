@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
 		if ((index = get_proc_index(dest_proc)) != -1) {
 			get_proc_info(index, &send, &rec, &data_size, &procptr);
 			printf
-			    ("Index %d\t\t%s\tSent %d\tReceived %d, Data size of %d\n",
+			    ("Index %2d %18s  Sent %2d  Received %2d, Data size of %2d\n",
 			     index, procptr, send, rec, data_size);
 			exit(0);
 		}
@@ -82,7 +82,7 @@ int main(int argc, char *argv[])
 				get_proc_info(i, &send, &rec, &data_size,
 					      &procptr);
 				printf
-				    ("Index %d\t\t%s\tSent %d\tReceived %d, Data size of %d\n",
+				    ("Index %2d %18s  Sent %2d  Received %2d, Data size of %2d\n",
 				     i, procptr, send, rec, data_size);
 			}
 		}

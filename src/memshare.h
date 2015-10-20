@@ -30,7 +30,7 @@
 
 #define ACK      100
 
-#define NUMBER_OF_PROCS 10
+#define NUMBER_OF_PROCS 20
 
 /* struct that is passed along with the data/signal between procs */
 typedef struct {
