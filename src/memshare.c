@@ -699,6 +699,7 @@ int init_memshare(char *proc_name, int size, int qsize)
 	/* map up the ctrl area */
 	if ((shm_ctrl_ptr = get_shm(SHM_CTRL_KEY, CTRL_SIZE, &ctrl_mode)) == 0) {
 		print(LOG_ERR, "Unable to alloc shared mem\n");
+		unlock(lock_ctrl_sem);
 		return 3;
 	}
 	print(LOG_DEBUG, "Init_memshare populate memproc\n");
@@ -706,10 +707,14 @@ int init_memshare(char *proc_name, int size, int qsize)
 
 	if (!send_only) {
 		retvalue = add_proc(proc_name, size);
-		if (retvalue == 1)
+		if (retvalue == 1) {
+			unlock(lock_ctrl_sem);
 			return 4;
-		if (retvalue == 2)
+		}
+		if (retvalue == 2) {
+			unlock(lock_ctrl_sem);
 			return 5;
+		}
 	}
 
 	unlock(lock_ctrl_sem);
