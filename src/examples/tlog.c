@@ -152,10 +152,12 @@ int tsyslog_init(char *name)
 
 	openlog(tproc, LOG_NDELAY | LOG_CONS, LOG_LOCAL0);
 
+	pthread_mutex_lock(&mask_mutex);
 	oldvalue = tlog_mask;	/* Store old value, whatever it is */
 	tlog_mask = 64;		/* Setting bit 6, LOG_INFO to allow info printout */
 	tsyslog(LOG_INFO, "Initializing tsyslog\n");
 	tlog_mask = oldvalue;	/* Set back old value */
+	pthread_mutex_lock(&mask_mutex);
 
 	/* we don't need much space */
 	if ((retvalue = init_memshare(tproc, SHMEMSIZE, 512)) != 0) {
