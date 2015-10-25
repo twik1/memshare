@@ -157,7 +157,7 @@ int tsyslog_init(char *name)
 	tlog_mask = 64;		/* Setting bit 6, LOG_INFO to allow info printout */
 	tsyslog(LOG_INFO, "Initializing tsyslog\n");
 	tlog_mask = oldvalue;	/* Set back old value */
-	pthread_mutex_lock(&mask_mutex);
+	pthread_mutex_unlock(&mask_mutex);
 
 	/* we don't need much space */
 	if ((retvalue = init_memshare(tproc, SHMEMSIZE, 512)) != 0) {
