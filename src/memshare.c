@@ -43,30 +43,34 @@ char *shm_ctrl_ptr = NULL;
 int lock_ctrl_sem = 0;
 /* internal memory view of the ctrl area */
 mem_proc_entry mem_entry[NUMBER_OF_PROCS];
+
 /* initialized flag */
 int initialized = 0, send_only = 1;
-/* My own process */
-char my_proc[PROC_NAME_SIZE];
 
-int my_index, queue_index, sequence = 0;
+/* My own process and index */
+char my_proc[PROC_NAME_SIZE];
+int my_index;
+
+
+int queue_index, sequence = 0;
 
 static int create_lock(int key, int value);
-static void lock(int sem);
-static void unlock(int sem);
+static int lock(int sem);
+static int unlock(int sem);
+static int set_active(int sem);
 static int try_lock1(int sem);
 
 static void init_mem_proc(void);
-static void populate_mem_proc(void);
 static int clear_shm(int key, int size);
 static char *get_shm(int key, int size, int *mode);
 
 static proc_entry *get_proc_at(int index);
-static int clear_proc_entry(int index);
-static int get_next_free_index(void);
-static void populate_mem_proc_single(int index);
+static int free_index(int index);
 static int print(int level, const char *format, ...);
 static int inc_sent(void);
 static int inc_received(void);
+static int destroy_lock(int);
+static int update_cache(int, proc_entry*);
 
 callback_1 callback1 = NULL;
 callback_2 callback2 = NULL;
@@ -75,27 +79,27 @@ callback_data callbackdata = NULL;
 callback_extlog callbackextlog = NULL;
 
 
-/* print functions either syslog, printf of user specific */
 int current_level = LOG_ERR;
 
+/* print functions either printf or user specific */
 static int print(int level, const char *format, ...)
 {
 	va_list ap;
 	int retval = 0;
 
-	/* add syslog and user specific TODO */
 	va_start(ap, format);
 	if (callbackextlog) {
 		callbackextlog(level, format, ap);
 	} else {
 		if (level <= current_level) {
-		retval = vprintf(format, ap);
+			retval = vprintf(format, ap);
 		}
 	}
 	va_end(ap);
 	return retval;
 }
 
+/* Consumer thread, take from queue and execute user callback */
 static void *recthread2(void *arg)
 {
 	header *hdr;
@@ -105,6 +109,7 @@ static void *recthread2(void *arg)
 	for (;;) {
 		msg = qget(queue_index);
 		hdr = (header *) msg;
+		print(LOG_INFO, "Taking msg from queue with msg_type %d\n", hdr->msg_type);
 		switch (hdr->msg_type) {
 		case DATA:
 			if (callbackdata != NULL) {
@@ -114,8 +119,7 @@ static void *recthread2(void *arg)
 				free(msg);
 			} else {
 				print(LOG_WARNING,
-				      "No callback for msg_type %d\n",
-				      DATA);
+				      "No callback for msg_type %d\n", DATA);
 			}
 			break;
 
@@ -126,8 +130,7 @@ static void *recthread2(void *arg)
 				free(msg);
 			} else {
 				print(LOG_WARNING,
-				      "No callback for msg_type %d\n",
-				      SIGNAL1);
+				      "No callback for msg_type %d\n", SIGNAL1);
 			}
 			break;
 
@@ -139,8 +142,7 @@ static void *recthread2(void *arg)
 				free(msg);
 			} else {
 				print(LOG_WARNING,
-				      "No callback for msg_type %d\n",
-				      SIGNAL2);
+				      "No callback for msg_type %d\n", SIGNAL2);
 			}
 			break;
 
@@ -152,19 +154,17 @@ static void *recthread2(void *arg)
 				free(msg);
 			} else {
 				print(LOG_WARNING,
-				      "No callback for msg_type %d\n",
-				      SIGNAL3);
+				      "No callback for msg_type %d\n", SIGNAL3);
 			}
 			break;
 
 		default:
-			print(LOG_ERR, "Illeagal msg_type %d\n",
-			      hdr->msg_type);
+			print(LOG_ERR, "Illeagal msg_type %d\n", hdr->msg_type);
 			free(msg);
 			break;
 		}
 	}
-	return (void*)0;
+	return (void *)0;
 }
 
 static void *recthread1(void *arg)
@@ -174,9 +174,9 @@ static void *recthread1(void *arg)
 
 	for (;;) {
 		/* Add check for prio, TODO */
-		print(LOG_DEBUG, "recthread going to lock\n");
-		lock(mem_entry[my_index].rlock);
-		print(LOG_DEBUG, "Entry inserted in shm for my process\n");
+		print(LOG_INFO, "Recthread1 going to lock\n");
+		while (lock(mem_entry[my_index].rlock) < 0) ;
+		print(LOG_DEBUG, "Entry inserted in shm for my process %s\n", my_proc);
 		hdr = (header *) mem_entry[my_index].shm;
 		/* check return of allocation TODO */
 		msg = malloc(hdr->msg_len + SIZEOF_HEADER);
@@ -192,222 +192,142 @@ static void *recthread1(void *arg)
 			/* msg concidered received */
 			inc_received();
 		}
-		unlock(mem_entry[my_index].wlock);
+		while (unlock(mem_entry[my_index].wlock) < 0) ;
 	}
-	return (void*)0;
+	return (void *)0;
 }
 
-/********** ipc semaphore functions
-            to be used as mutexes    ***********/
-/* This function will try to create a semaphore for an index, exclusively    */
-/* If it already has been created it will fail and we will open it normally  */
-/* If the exclusive open succede we know we are the first process and we so  */
-/* we will initialize it to work as a mutex                                  */
-static int create_lock(int key, int value)
+/************* New procs to be used *****************/
+static proc_entry *get_proc_at_index(int index)
 {
-	/*struct sembuf op[1]; */
-	union semun ctrl;
-	int sem, mode = 0;
-
-	print(LOG_DEBUG, "Create_lock key=%d, value=%d\n", key, value);
-	if ((sem = semget(key, 1, IPC_EXCL | IPC_CREAT | 0666)) == -1) {
-		/* Trying to open it exclusively failed, try normal */
-		print(LOG_DEBUG, "Create_lock Key=%d already open\n", key);
-		mode = 1;
-		if ((sem = semget(key, 1, IPC_CREAT | 0666)) == -1) {
-			print(LOG_ERR, "Unable to create semaphore\n");
-			return -1;
-		}
-	}
-
-	/*op[0].sem_num = 0;
-	   op[0].sem_flg = 0; */
-	ctrl.val = value;
-
-	if (mode == 0) {
-		print(LOG_DEBUG, "Create_lock Init sem=%d to %d\n", sem, value);
-		/* Its the first time for this key, init it to work as a mutex */
-		if (semctl(sem, 0, SETVAL, ctrl) == -1) {
-			print(LOG_ERR,
-			      "Unable to initialize semaphore\n");
-			return -1;
-		}
-	}
-	return sem;
-}
-
-static int destroy_lock(int key)
-{
-	union semun ctrl;
-	int sem;
-
-	print(LOG_DEBUG, "Destroy_lock key=%d\n", key);
-	if ((sem = semget(key, 1, IPC_CREAT | 0600)) == -1) {
-		print(LOG_ERR, "Unable to create semaphore\n");
-		return 1;
-	}
-	if (semctl(sem, 0, IPC_RMID, ctrl) == -1) {
-		print(LOG_ERR, "Unable to initialize semaphore\n");
-		return 1;
-	}
-	return 0;
-}
-
-static void lock(int sem)
-{
-	struct sembuf op[1];
-	op[0].sem_num = 0;
-	op[0].sem_op = -1;
-	op[0].sem_flg = SEM_UNDO;
-	semop(sem, op, 1);
-}
-
-static void unlock(int sem)
-{
-	struct sembuf op[1];
-	op[0].sem_num = 0;
-	op[0].sem_op = 1;
-	op[0].sem_flg = 0;
-	semop(sem, op, 1);
-}
-
-static void set_active(int sem)
-{
-	struct sembuf op[1];
-	op[0].sem_num = 0;
-	op[0].sem_op = 1;
-	op[0].sem_flg = SEM_UNDO;
-	semop(sem, op, 1);
-}
-
-/* Should be used when leaving gracefully */
-/*static void clear_active(int sem)
-{
-	struct sembuf op[1];
-	op[0].sem_num = 0;
-	op[0].sem_op = -1;
-	op[0].sem_flg = 0;
-	semop(sem, op, 1);
-}*/
-
-static int try_lock1(int sem)
-{
-	struct sembuf op[1];
-	op[0].sem_num = 0;
-	op[0].sem_op = 0;
-	op[0].sem_flg = IPC_NOWAIT;
-	if (semop(sem, op, 1) == -1 && errno == EAGAIN) {
-		return 1;
-	}
-	return 0;
-}
-
-/********** mem_proc functions **********/
-static void init_mem_proc(void)
-{
-	int i;
-
-	for (i = 0; i < NUMBER_OF_PROCS; i++) {
-		mem_entry[i].shm = NULL;
-		mem_entry[i].rlock = 0;
-		mem_entry[i].wlock = 0;
-		mem_entry[i].active = 0;
-	}
-}
-
-/* Check a specific index int the ctrl area and copy to local memory  */
-
-static void populate_mem_proc_single(int index)
-{
+	char *tmp_ptr;
 	proc_entry *entry;
-	int sem, mode = 0;
+	tmp_ptr = shm_ctrl_ptr + (SIZEOF_PROC_ENTRY * index);
+	entry = (proc_entry *) tmp_ptr;
+	return entry;
+}
 
-	entry = (proc_entry *) get_proc_at(index);
-	if (entry->active) {
-		/* this entry should be active, if not it has crached and should be garbage collected */
-		if ((sem = create_lock(entry->key_active, 0)) != -1) {
-			if (try_lock1(sem)) {
-				print(LOG_DEBUG, "Index %d is active by %s\n",
-				      index, entry->proc_name);
-				/* active lets store the data */
-				mem_entry[index].active = sem;
-				if ((mem_entry[index].shm =
-				     (char *)get_shm(entry->key_shm,
-						     entry->size_shm,
-						     &mode)) == 0) {
-					/* garbage collect, they should have valid keys */
-					print(LOG_ERR,
-					      "Unable to alloc shared mem\n");
-					clear_proc_entry(index);
-					return;
-				}
-				if ((mem_entry[index].rlock =
-				     create_lock(entry->key_rlock, 0)) == -1) {
-					/* garbage collect, they should have valid keys */
-					print(LOG_ERR,
-					      "Unable to create rlock\n");
-					clear_proc_entry(index);
-					return;
-				}
-				if ((mem_entry[index].wlock =
-				     create_lock(entry->key_wlock, 0)) == -1) {
-					/* garbage collect, they should have valid keys */
-					print(LOG_ERR,
-					      "Unable to create wlock\n");
-					clear_proc_entry(index);
-					return;
-				}
+int check_proc_at_index(int index)
+{
+	proc_entry *entry = get_proc_at_index(index);
+
+	if (entry->key_active) {
+		if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
+			print(LOG_ERR, "Unable to create active lock\n");
+			return 0;
+		}
+		if (try_lock1(mem_entry[index].active)) {
+			if (!memcmp(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE)) {
+				print(LOG_DEBUG, "Index %d is occupied by %s and active\n", index, entry->proc_name);
 			} else {
-				print(LOG_DEBUG,
-				      "Index %d is active in shared mem but has no process\n",
-				      index);
-				clear_proc_entry(index);
-				/* garbage collect */
+				print(LOG_DEBUG, "Index %d is occupied by %s, cache is however outdated\n", index, entry->proc_name);
+				update_cache(index, entry);
 			}
-			memcpy(mem_entry[index].proc_name, entry->proc_name,
-			       PROC_NAME_SIZE);
+			return 1;
+		} else {
+			print(LOG_DEBUG, "Index %d has been active but isn't any more, reset key_active\n", index);
+			free_index(index);
 		}
 	} else {
-		print(LOG_DEBUG, "Index %d is not active\n", index);
-	}
-}
-
-/* scan through the ctrl area and copy to local memory */
-static void populate_mem_proc(void)
-{
-	int i;
-
-	for (i = 0; i < NUMBER_OF_PROCS; i++) {
-		populate_mem_proc_single(i);
-	}
-}
-
-int check_proc_entry(int index)
-{
-	/* compare mem_entry with shared memory and se if process is active */
-	proc_entry *entry;
-
-	entry = (proc_entry *) get_proc_at(index);
-
-	populate_mem_proc_single(index);
-
-	print(LOG_DEBUG, "Check proc entry index %d active1 %d active2 %d\n",
-	      index, try_lock1(mem_entry[index].active), entry->active);
-	if (try_lock1(mem_entry[index].active)
-	    &&
-	    (!memcmp
-	     (mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE))
-	    && entry->active) {
-		return 1;
+		print(LOG_DEBUG, "Index %d has never been active\n", index);
 	}
 	return 0;
 }
 
-static int clear_proc_entry(int index)
+int get_index_for_proc(char *proc)
+{
+	int i;
+
+	for (i = 0; i < NUMBER_OF_PROCS; i++) {
+		if (check_proc_at_index(i)) {
+			if (!strcmp(mem_entry[i].proc_name, proc)) {
+				return i;
+			}
+		}
+	}
+	return -1;
+}
+
+static int get_first_free(void)
+{
+	int i;
+
+	for (i = 0; i < NUMBER_OF_PROCS; i++) {
+		if (!check_proc_at_index(i)) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static int update_cache(int index, proc_entry *entry)
+{
+	int mode = 0;
+	print(LOG_INFO, "Updating cache for %s at index %d\n", entry->proc_name, index);
+	if ((mem_entry[index].rlock = create_lock(entry->key_rlock, 0)) == -1) {
+		print(LOG_ERR, "Unable to create rlock\n");
+		return -1;
+	}
+	print(LOG_DEBUG, "Mapping write lock for %s at index %d\n", entry->proc_name, index);
+	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 0)) == -1) {
+		print(LOG_ERR, "Unable to create wlock\n");
+		return -1;
+	}
+	if ((mem_entry[index].shm = (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
+		print(LOG_ERR, "Unable to map shmc\n");
+		return -1;
+	}
+	if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
+		print(LOG_ERR, "Unable to create  active lock\n");
+		return -1;
+	}
+	memcpy(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE);
+	return 0;
+}
+
+static int seize_index(int index, int size, char *proc)
+{
+	int mode = 0, key_base = 0;
+	print(LOG_INFO, "Seizing index %d with %s\n", index, proc);
+	proc_entry *entry = get_proc_at_index(index);
+	/* setting up ctr area for my index */
+	key_base = index * 4 + SEM_CTRL_KEY;
+	entry->key_shm = key_base + 1;
+	entry->key_rlock = key_base + 2;
+	entry->key_wlock = key_base + 3;
+	entry->key_active = key_base + 4;
+	entry->size_shm = size;
+	entry->sent = 0;
+	entry->received = 0;
+	my_index = index;
+	
+	/* map up the cache (mem_entry) */
+	if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
+		return -1;
+	}
+	/* signal active */
+	if (set_active(mem_entry[index].active)) {
+		return -1;
+	}
+	if ((mem_entry[index].rlock = create_lock(entry->key_rlock, 0)) == -1) {
+		return -1;
+	}
+	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 1)) == -1) {
+		return -1;
+	}
+	if ((mem_entry[index].shm = (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
+		return -1;
+	}
+	strncpy(entry->proc_name, proc, PROC_NAME_SIZE - 1);
+	memcpy(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE);
+	return 0;
+}
+
+static int free_index(int index)
 {
 	proc_entry *entry;
-	print(LOG_DEBUG, "Removes proc from entry and memlist\n");
-	entry = (proc_entry *) get_proc_at(index);
+	print(LOG_INFO, "Remove proc from entry and cache\n");
+	entry = (proc_entry *) get_proc_at_index(index);
 	clear_shm(entry->key_shm, entry->size_shm);
 	entry->key_shm = 0;
 	entry->size_shm = 0;
@@ -425,76 +345,274 @@ static int clear_proc_entry(int index)
 	return 0;
 }
 
-/* This function will serach for a free entry in the ctrl area        */
-/* there it will fill all the keys that can be used to map shared mem */
-static int add_proc(char *name, int size)
+/********** ipc semaphore functions
+            to be used as mutexes    ***********/
+static int chase_semget_error(int err)
 {
-	proc_entry *entry;
-	int index, key_base = 0, mode = 0;
+	int retvalue = -1;
+	switch (errno) {
+	case EACCES:
+		print(LOG_ERR,
+		      "A semaphore set exists for key, but the calling process does not\n"
+		      "have  permission  to  access  the  set,  and  does  not have the\n"
+		      "CAP_IPC_OWNER capability.\n");
+		break;
 
-	if ((index = get_next_free_index()) == NUMBER_OF_PROCS) {
+	case EEXIST:
+		/* Trying to open it exclusively failed, try normal */
+		retvalue = 0;
+		break;
+
+	case EINVAL:
+		print(LOG_ERR,
+		      "nsems  is less than 0 or greater than the limit on the number of\n"
+		      "semaphores per semaphore set (SEMMSL), or a semaphore set corre-\n"
+		      "sponding  to  key  already  exists, and nsems is larger than the\n"
+		      "number of semaphores in that set.\n");
+		break;
+
+	case ENOENT:
+		print(LOG_ERR,
+		      "No semaphore set exists for  key  and  semflg  did  not  specify\n"
+		      "IPC_CREAT.\n");
+		break;
+
+	case ENOMEM:
+		print(LOG_ERR,
+		      "A  semaphore  set has to be created but the system does not have\n"
+		      "enough memory for the new data structure.\n");
+		break;
+
+	case ENOSPC:
+		print(LOG_ERR,
+		      "A semaphore set has to be created but the system limit  for  the\n"
+		      "maximum  number  of  semaphore sets (SEMMNI), or the system wide\n"
+		      "maximum number of semaphores (SEMMNS), would be exceeded.\n");
+		break;
+
+	default:
+		print(LOG_ERR, "Unknown semget() error (%m)\n");
+		break;
+	}
+	return retvalue;
+}
+
+static int chase_semop_error(int err)
+{
+	int retvalue = 0;
+	switch (err) {
+	case E2BIG:
+		print(LOG_ERR,
+		      "the argument nsops is greater than semopm, the maximum number of\n"
+		      "operations allowed per system call.\n");
+		break;
+
+	case EACCES:
+		print(LOG_ERR,
+		      "the  calling  process  does not have the permissions required to\n"
+		      "perform the specified semaphore operations, and  does  not  have\n"
+		      "the CAP_IPC_OWNER capability.\n");
+		break;
+
+	case EAGAIN:
+		print(LOG_DEBUG,
+		      "An operation could not proceed immediately and either IPC_NOWAIT\n"
+		      "was specified in sem_flg or the time limit specified in  timeout\n"
+		      "expired.\n");
+		retvalue = -1;
+		break;
+
+	case EFAULT:
+		print(LOG_ERR,
+		      "An  address specified in either the sops or the timeout argument\n"
+		      "isn't accessible.\n");
+		break;
+
+	case EFBIG:
+		print(LOG_ERR,
+		      "For some operation the value  of  sem_num  is  less  than  0  or\n"
+		      "greater than or equal to the number of semaphores in the set.\n");
+		break;
+
+	case EIDRM:
+		print(LOG_ERR, "The semaphore set was removed.\n");
+		break;
+
+	case EINTR:
+		print(LOG_DEBUG,
+		      "While  blocked in this system call, the process caught a signal;\n"
+		      "see signal(7).\n");
+		/*retvalue = -1;*/
+		break;
+
+	case EINVAL:
+		print(LOG_ERR,
+		      "The semaphore set doesn't exist, or semid is less than zero,  or\n"
+		      "nsops has a non-positive value.\n");
+		break;
+
+	case ENOMEM:
+		print(LOG_ERR,
+		      "The  sem_flg of some operation specified SEM_UNDO and the system\n"
+		      "does not have enough memory to allocate the undo structure.\n");
+		break;
+
+	case ERANGE:
+		print(LOG_ERR,
+		      "For some operation sem_op+semval is  greater  than  SEMVMX,  the\n"
+		      "implementation dependent maximum value for semval.\n");
+		break;
+
+	default:
+		print(LOG_ERR, "Unknown return from semop() (%m)\n");
+		break;
+	}
+	return retvalue;
+}
+
+/* This function will try to create a semaphore for an index, exclusively    */
+/* If it already has been created it will fail and we will open it normally  */
+/* If the exclusive open succede we know we are the first process and we so  */
+/* we will initialize it to work as a mutex                                  */
+static int create_lock(int key, int value)
+{
+	/*struct sembuf op[1]; */
+	union semun ctrl;
+	int sem;
+
+	print(LOG_INFO, "Create_lock key=%d, value=%d\n", key, value);
+	if ((sem = semget(key, 1, IPC_EXCL | IPC_CREAT | 0666)) == -1) {
+		if (!chase_semget_error(errno)) {	/* true if retvalue EEXIST */
+			print(LOG_DEBUG, "Create_lock Key=%d already open\n", key);
+			if ((sem = semget(key, 1, IPC_CREAT | 0666)) == -1) {
+				print(LOG_ERR,
+				      "Unable to create semaphore (%m)\n");
+				return -1;
+			}
+			return sem;
+		}
+		return -1;
+	}
+	ctrl.val = value;
+	print(LOG_INFO, "Create_lock Init sem=%d to %d\n", sem, value);
+	/* Its the first time for this key, init it to work as a mutex */
+	if (semctl(sem, 0, SETVAL, ctrl) == -1) {
+		print(LOG_ERR, "Unable to initialize semaphore (%m)\n");
+		return -1;
+	}
+	return sem;
+}
+
+static int destroy_lock(int key)
+{
+	union semun ctrl;
+	int sem;
+
+	print(LOG_INFO, "Destroy_lock key=%d\n", key);
+	if ((sem = semget(key, 1, IPC_CREAT | 0600)) == -1) {
+		print(LOG_ERR, "Unable to create semaphore (%m)\n");
 		return 1;
 	}
-	print(LOG_DEBUG, "Adding proc %s to index %d\n", name, index);
-	entry = get_proc_at(index);
-	key_base = index * 4 + SEM_CTRL_KEY;
-	entry->key_shm = key_base + 1;
-	entry->key_rlock = key_base + 2;
-	entry->key_wlock = key_base + 3;
-	entry->key_active = key_base + 4;
-	entry->size_shm = size;
-	entry->sent = 0;
-	entry->received = 0;
-	my_index = index;
-	print(LOG_DEBUG,
-	      "Allocating shared memory for key %d size %d\n",
-	      entry->key_shm, entry->size_shm);
-	/* Map up yourself in the local memory map with pointers instead */
-	/* of keys                                                       */
-	if ((mem_entry[index].shm =
-	     get_shm(entry->key_shm, entry->size_shm, &mode)) == NULL) {
-		clear_proc_entry(index);
-		return 2;
+	if (semctl(sem, 0, IPC_RMID, ctrl) == -1) {
+		print(LOG_ERR, "Unable to remove semaphore (%m)\n");
+		return 1;
 	}
-	print(LOG_DEBUG, "Shared memory allocated for key %d\n", entry->key_shm);
-	if ((mem_entry[index].rlock = create_lock(entry->key_rlock, 0)) == -1) {
-		clear_proc_entry(index);
-		return 2;
-	}
-	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 1)) == -1) {
-		clear_proc_entry(index);
-		return 2;
-	}
-	if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
-		clear_proc_entry(index);
-		return 2;
-	}
-	set_active(mem_entry[index].active);
-	if (try_lock1(mem_entry[index].active))
-		print(LOG_DEBUG, "Proc %s is now active at index %d\n", name,
-		      index);
-	strncpy(entry->proc_name, name, PROC_NAME_SIZE - 1);
-	memcpy(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE);
-	/* signal the entry active to use */
-	entry->active = 1;
 	return 0;
 }
+
+static int lock(int sem)
+{
+	int retvalue = 0;
+	struct sembuf op[1];
+	op[0].sem_num = 0;
+	op[0].sem_op = -1;
+	op[0].sem_flg = SEM_UNDO;
+	if (semop(sem, op, 1))
+		retvalue = chase_semop_error(errno);
+	print(LOG_DEBUG, "retvalue %d\n", retvalue);
+	return retvalue;
+}
+
+static int unlock(int sem)
+{
+	int retvalue = 0;
+	struct sembuf op[1];
+	op[0].sem_num = 0;
+	op[0].sem_op = 1;
+	op[0].sem_flg = 0;
+	if (semop(sem, op, 1))
+		retvalue = chase_semop_error(errno);
+	return retvalue;
+}
+
+static int set_active(int sem)
+{
+	int retvalue = 0;
+	struct sembuf op[1];
+	op[0].sem_num = 0;
+	op[0].sem_op = 1;
+	op[0].sem_flg = SEM_UNDO;
+	if (semop(sem, op, 1))
+		retvalue = chase_semop_error(errno);
+	return retvalue;
+}
+
+/* Should be used when leaving gracefully */
+/*static int clear_active(int sem)
+{
+    int retvalue = 0;
+	struct sembuf op[1];
+	op[0].sem_num = 0;
+	op[0].sem_op = -1;
+	op[0].sem_flg = 0;
+	if (semop(sem, op, 1))
+	 	retvalue = chase_semop_error(errno);
+	return retvalue;
+}*/
+
+static int try_lock1(int sem)
+{
+	int retvalue = 0;
+	struct sembuf op[1];
+	op[0].sem_num = 0;
+	op[0].sem_op = 0;
+	op[0].sem_flg = IPC_NOWAIT;
+	if (semop(sem, op, 1)) {
+		if (chase_semop_error(errno))
+			retvalue = 1;
+	}
+	return retvalue;
+}
+
+/********** mem_proc functions **********/
+static void init_mem_proc(void)
+{
+	int i;
+
+	for (i = 0; i < NUMBER_OF_PROCS; i++) {
+		mem_entry[i].shm = NULL;
+		mem_entry[i].rlock = 0;
+		mem_entry[i].wlock = 0;
+		mem_entry[i].active = 0;
+	}
+}
+
 
 static int start_listen_thread(void)
 {
 	pthread_attr_t tattr;
 
 	if (pthread_attr_init(&tattr) != 0) {
-	  print(LOG_ERR, "Unable to init thread attribute\n");
-	  return 1;
+		print(LOG_ERR, "Unable to init thread attribute\n");
+		return 1;
 	}
 	if (pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED) != 0) {
-	  print(LOG_ERR, "Unable to set detached state to thread\n");
-	  return 1;
+		print(LOG_ERR, "Unable to set detached state to thread\n");
+		return 1;
 	}
 	if (pthread_attr_setinheritsched(&tattr, PTHREAD_INHERIT_SCHED) != 0) {
-	  print(LOG_ERR, "Unable to set inherit scheduling\n");
-	  return 1;
+		print(LOG_ERR, "Unable to set inherit scheduling\n");
+		return 1;
 	}
 
 	if (pthread_create(&recthread1_t, &tattr, recthread1, (void *)NULL) !=
@@ -517,8 +635,7 @@ static int clear_shm(int key, int size)
 	int shmid;
 
 	if ((shmid = shmget(key, size, IPC_CREAT | 0666)) < 0) {
-		print(LOG_ERR, "Unable get shared mem for key\n",
-		      key);
+		print(LOG_ERR, "Unable get shared mem for key\n", key);
 		return 1;
 	}
 	shmctl(shmid, IPC_RMID, NULL);
@@ -537,63 +654,30 @@ static char *get_shm(int key, int size, int *mode)
 	int shmid;
 	char *data;
 
+	print(LOG_INFO, "Map the shmc for key %d with size %d\n", key, size);
 	if (*mode) {
 		if ((shmid =
 		     shmget(key, size, IPC_CREAT | IPC_EXCL | 0666)) < 0) {
 			/* already open */
 			*mode = 0;
 		} else {
-			print(LOG_DEBUG, "Creating shared mem for key%d\n", key);
+			print(LOG_DEBUG, "Creating shared mem for key%d\n",
+			      key);
 		}
 	}
 	if (*mode == 0) {
 		if ((shmid = shmget(key, size, IPC_CREAT | 0666)) < 0) {
-			print(LOG_ERR, "Unable get shared mem for key %d\n", key);
+			print(LOG_ERR, "Unable get shared mem for key %d\n",
+			      key);
 			return NULL;
 		}
 	}
 
-	print(LOG_DEBUG, "Key %d allocated with shmid %d\n", key, shmid);
 	if ((data = shmat(shmid, NULL, 0)) == (char *)-1) {
 		print(LOG_ERR, "Unable to alloc shared mem for key %d\n", key);
 		return NULL;
 	}
 	return data;
-}
-
-static int get_next_free_index()
-{
-	int i;
-
-	for (i = 0; i < NUMBER_OF_PROCS; i++) {
-		if (!check_proc_entry(i)) {
-			return i;
-		}
-	}
-	return NUMBER_OF_PROCS;
-}
-
-static proc_entry *get_proc_at(int index)
-{
-	char *tmp_ptr;
-	proc_entry *entry;
-	tmp_ptr = shm_ctrl_ptr + (SIZEOF_PROC_ENTRY * index);
-	entry = (proc_entry *) tmp_ptr;
-	return entry;
-}
-
-int get_proc_index(char *proc)
-{
-	int i;
-
-	for (i = 0; i < NUMBER_OF_PROCS; i++) {
-		if (check_proc_entry(i)) {
-			if (!strcmp(mem_entry[i].proc_name, proc)) {
-				return i;
-			}
-		}
-	}
-	return -1;
 }
 
 static int inc_sent(void)
@@ -602,7 +686,7 @@ static int inc_sent(void)
 
 	/* The locks might not be needed TODO */
 	/*lock(lock_ctrl_sem); */
-	entry = (proc_entry *) get_proc_at(my_index);
+	entry = (proc_entry *) get_proc_at_index(my_index);
 	entry->sent++;
 	/*unlock(lock_ctrl_sem); */
 	return 0;
@@ -614,7 +698,7 @@ static int inc_received(void)
 
 	/* The locks might not be needed TODO */
 	/*lock(lock_ctrl_sem); */
-	entry = (proc_entry *) get_proc_at(my_index);
+	entry = (proc_entry *) get_proc_at_index(my_index);
 	entry->received++;
 	/*unlock(lock_ctrl_sem); */
 	return 0;
@@ -663,8 +747,8 @@ void signal3_register(callback_3 cb3)
 int init_memshare(char *proc_name, int size, int qsize)
 {
 	int ctrl_mode = 1;
-	int retvalue = 0;
-	print(LOG_DEBUG, "Init_memshare start\n");
+	int retvalue = 0, index;
+	print(LOG_INFO, "Init_memshare start for %s with size %d\n", proc_name, size);
 
 	if (initialized)
 		return 1;
@@ -672,57 +756,63 @@ int init_memshare(char *proc_name, int size, int qsize)
 	if (proc_name == NULL)
 		return 2;
 
-	memcpy(my_proc, proc_name, PROC_NAME_SIZE);
+	memset(my_proc, 0, PROC_NAME_SIZE);
+	strncpy(my_proc, proc_name, PROC_NAME_SIZE-1);
 
 	/* If I don't set a qsize I'm considered to be a send proc only */
 	if (size)
 		send_only = 0;
-		
+
 	if (!send_only) {
 		init_queues();
 		seize_queue(&queue_index, "memshare", qsize);
 	}
 
-	/* clear the memory view */
+	/* clear the cache */
 	init_mem_proc();
 
 	/* start off by locking the ctrl lock */
 	if ((lock_ctrl_sem = create_lock(SEM_CTRL_KEY, 1)) == -1) {
-		print(LOG_ERR, "Unable to create semaphore\n");
+		print(LOG_ERR, "Unable to create ctrl lock\n");
 		return 1;
 	}
-	print(LOG_DEBUG, "Created ctrl lock\n");
 
-	lock(lock_ctrl_sem);
-	print(LOG_DEBUG, "Init_memshare ctrl\n");
+	while (lock(lock_ctrl_sem) < 0);
 
 	/* map up the ctrl area */
 	if ((shm_ctrl_ptr = get_shm(SHM_CTRL_KEY, CTRL_SIZE, &ctrl_mode)) == 0) {
 		print(LOG_ERR, "Unable to alloc shared mem\n");
-		unlock(lock_ctrl_sem);
+		while (unlock(lock_ctrl_sem) < 0);
 		return 3;
 	}
-	print(LOG_DEBUG, "Init_memshare populate memproc\n");
-	populate_mem_proc();
-
+	
+	if (get_index_for_proc(my_proc) != -1) {
+		print(LOG_ERR, "Procname %s already exists\n", my_proc);
+		exit(2);
+	}
+	index = get_first_free();
+	print(LOG_DEBUG, "Next free index is %d\n", index);
+	
 	if (!send_only) {
-		retvalue = add_proc(proc_name, size);
+		retvalue = seize_index(index, size, my_proc);
+
 		if (retvalue == 1) {
-			unlock(lock_ctrl_sem);
+			while (unlock(lock_ctrl_sem) < 0);
 			return 4;
 		}
 		if (retvalue == 2) {
-			unlock(lock_ctrl_sem);
+			while (unlock(lock_ctrl_sem) < 0);
 			return 5;
 		}
+	} else {
+		print(LOG_INFO, "%s is a send only proc\n", my_proc);
 	}
 
-	unlock(lock_ctrl_sem);
-	print(LOG_DEBUG, "Init_memshare unlock ctrl\n");
+	while (unlock(lock_ctrl_sem) < 0);
 
 	if (!send_only)
 		start_listen_thread();
-	print(LOG_DEBUG, "Init_memshare done\n");
+	print(LOG_DEBUG, "Init_memshare done for %s\n", my_proc);
 	initialized = 1;
 	return 0;
 }
@@ -732,17 +822,17 @@ int data(char *proc, char *data, int len)
 	int index;
 	header hdr;
 
-        memset(&hdr, 0, sizeof(hdr));
+	memset(&hdr, 0, sizeof(hdr));
 
 	if (!initialized)
 		return 2;
-	if ((index = get_proc_index(proc)) < 0) {
+	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
-	/*populate_mem_proc_single(index); */
+
 	print(LOG_DEBUG, "Sending data to %s at index %d\n", proc, index);
-	lock(mem_entry[index].wlock);
+	while (lock(mem_entry[index].wlock) < 0);
 	hdr.msg_type = DATA;
 	hdr.msg_len = len;
 	hdr.seq = sequence++;
@@ -751,29 +841,29 @@ int data(char *proc, char *data, int len)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), data, len);
 	if (!send_only)
 		inc_sent();
-	unlock(mem_entry[index].rlock);
+	while (unlock(mem_entry[index].rlock) < 0);
 	return 0;
 }
 
-/* return 1 the process isn't connected */
 int signal1(char *proc, int data1)
 {
 	int index;
 	header hdr;
 	signal sig;
 
-        memset(&hdr, 0, sizeof(hdr));
-        memset(&sig, 0, sizeof(sig));
+	memset(&hdr, 0, sizeof(hdr));
+	memset(&sig, 0, sizeof(sig));
 
 	if (!initialized)
 		return 2;
-	if ((index = get_proc_index(proc)) < 0) {
+	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
-	/*populate_mem_proc_single(index); */
+
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
-	lock(mem_entry[index].wlock);
+	while (lock(mem_entry[index].wlock) < 0);
+	print(LOG_DEBUG, "Sent signal to %s at index %d\n", proc, index);
 	hdr.msg_type = SIGNAL1;
 	hdr.msg_len = SIZEOF_SIGNAL;
 	hdr.seq = sequence++;
@@ -783,7 +873,7 @@ int signal1(char *proc, int data1)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), &sig, SIZEOF_SIGNAL);
 	if (!send_only)
 		inc_sent();
-	unlock(mem_entry[index].rlock);
+	while (unlock(mem_entry[index].rlock) < 0);
 	return 0;
 }
 
@@ -793,18 +883,19 @@ int signal2(char *proc, int data1, int data2)
 	header hdr;
 	signal sig;
 
-        memset(&hdr, 0, sizeof(hdr));
-        memset(&sig, 0, sizeof(sig));
+	memset(&hdr, 0, sizeof(hdr));
+	memset(&sig, 0, sizeof(sig));
 
 	if (!initialized)
 		return 2;
-	if ((index = get_proc_index(proc)) < 0) {
+	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
-	/*populate_mem_proc_single(index); */
+
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
-	lock(mem_entry[index].wlock);
+	while (lock(mem_entry[index].wlock) < 0);
+	
 	hdr.msg_type = SIGNAL2;
 	hdr.msg_len = SIZEOF_SIGNAL;
 	hdr.seq = sequence++;
@@ -815,7 +906,7 @@ int signal2(char *proc, int data1, int data2)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), &sig, SIZEOF_SIGNAL);
 	if (!send_only)
 		inc_sent();
-	unlock(mem_entry[index].rlock);
+	while (unlock(mem_entry[index].rlock) < 0);
 	return 0;
 }
 
@@ -825,18 +916,18 @@ int signal3(char *proc, int data1, int data2, int data3)
 	header hdr;
 	signal sig;
 
-        memset(&hdr, 0, sizeof(hdr));
-        memset(&sig, 0, sizeof(sig));
+	memset(&hdr, 0, sizeof(hdr));
+	memset(&sig, 0, sizeof(sig));
 
 	if (!initialized)
 		return 2;
-	if ((index = get_proc_index(proc)) < 0) {
+	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
-	/*populate_mem_proc_single(index); */
+
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
-	lock(mem_entry[index].wlock);
+	while (lock(mem_entry[index].wlock) < 0);
 	hdr.msg_type = SIGNAL3;
 	hdr.msg_len = SIZEOF_SIGNAL;
 	hdr.seq = sequence++;
@@ -848,7 +939,7 @@ int signal3(char *proc, int data1, int data2, int data3)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), &sig, SIZEOF_SIGNAL);
 	if (!send_only)
 		inc_sent();
-	unlock(mem_entry[index].rlock);
+	while (unlock(mem_entry[index].rlock) < 0);
 	return 0;
 }
 
@@ -857,11 +948,11 @@ int get_datasize(char *proc)
 	int index;
 	proc_entry *entry;
 
-	if ((index = get_proc_index(proc)) < 0) {
+	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 0;
 	}
-	entry = get_proc_at(index);
+	entry = get_proc_at_index(index);
 	return (entry->size_shm);
 }
 
@@ -871,7 +962,7 @@ int get_proc_info(int index, int *send_count, int *rec_count, int *data_size,
 	proc_entry *entry;
 
 	/* this call will not check if the entry is active */
-	entry = get_proc_at(index);
+	entry = get_proc_at_index(index);
 	*send_count = entry->sent;
 	*rec_count = entry->received;
 	*data_size = entry->size_shm;

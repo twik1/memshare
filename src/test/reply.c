@@ -74,9 +74,7 @@ int main(int argc, char *argv[])
 	procname = malloc(256);
 	strncpy(procname, argv[1], 256);
 
-	set_print_level(0);
 	printf("%s started\n", procname);
-
 	if (init_memshare(procname, SHMEMSIZE, QUEUESIZE)) {
 		printf("Failed to init memshare\n");
 		if (strncmp(procname, "number_8", PROC_NAME_SIZE) == 0) {

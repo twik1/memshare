@@ -65,7 +65,7 @@ int main(int argc, char *argv[])
 
 	switch (mode) {
 	case 2:
-		if ((index = get_proc_index(dest_proc)) != -1) {
+		if ((index = get_index_for_proc(dest_proc)) != -1) {
 			get_proc_info(index, &send, &rec, &data_size, &procptr);
 			printf
 			    ("Index %2d %18s  Sent %2d  Received %2d, Data size of %2d\n",
@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
 
 	case 1:
 		for (i = 0; i < NUMBER_OF_PROCS; i++) {
-			if (check_proc_entry(i)) {
+			if (check_proc_at_index(i)) {
 				get_proc_info(i, &send, &rec, &data_size,
 					      &procptr);
 				printf

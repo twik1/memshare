@@ -366,7 +366,8 @@ int test_seven()
 
 int main(int argc, char *argv[])
 {
-	if (system("./reply reply &") == -1)
+	/*int retvalue;*/
+	if (system("./reply reply &> /dev/null") == -1)
 		printf("system cmd failed\n");
 	sleep(1);
 
@@ -376,15 +377,17 @@ int main(int argc, char *argv[])
 	if (test_two())
 		exit(1);
 
+    /*retvalue = init_memshare("memtest", SHMEMSIEZ, QUEUESIZE);*/
 	data_register(data_callback);
 	signal1_register(signal1_callback);
 	signal2_register(signal2_callback);
 	signal3_register(signal3_callback);
 
+	sleep(2);
+
 	if (test_three())
 		exit(1);
 
-	sleep(2);
 	if (test_four())
 		exit(1);
 
