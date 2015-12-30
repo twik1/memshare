@@ -51,7 +51,6 @@ int initialized = 0, send_only = 1;
 char my_proc[PROC_NAME_SIZE];
 int my_index;
 
-
 int queue_index, sequence = 0;
 
 static int create_lock(int key, int value);
@@ -70,14 +69,13 @@ static int print(int level, const char *format, ...);
 static int inc_sent(void);
 static int inc_received(void);
 static int destroy_lock(int);
-static int update_cache(int, proc_entry*);
+static int update_cache(int, proc_entry *);
 
 callback_1 callback1 = NULL;
 callback_2 callback2 = NULL;
 callback_3 callback3 = NULL;
 callback_data callbackdata = NULL;
 callback_extlog callbackextlog = NULL;
-
 
 int current_level = LOG_ERR;
 
@@ -109,7 +107,8 @@ static void *recthread2(void *arg)
 	for (;;) {
 		msg = qget(queue_index);
 		hdr = (header *) msg;
-		print(LOG_INFO, "Taking msg from queue with msg_type %d\n", hdr->msg_type);
+		print(LOG_INFO, "Taking msg from queue with msg_type %d\n",
+		      hdr->msg_type);
 		switch (hdr->msg_type) {
 		case DATA:
 			if (callbackdata != NULL) {
@@ -176,7 +175,8 @@ static void *recthread1(void *arg)
 		/* Add check for prio, TODO */
 		print(LOG_INFO, "Recthread1 going to lock\n");
 		while (lock(mem_entry[my_index].rlock) < 0) ;
-		print(LOG_DEBUG, "Entry inserted in shm for my process %s\n", my_proc);
+		print(LOG_DEBUG, "Entry inserted in shm for my process %s\n",
+		      my_proc);
 		hdr = (header *) mem_entry[my_index].shm;
 		/* check return of allocation TODO */
 		msg = malloc(hdr->msg_len + SIZEOF_HEADER);
@@ -212,20 +212,29 @@ int check_proc_at_index(int index)
 	proc_entry *entry = get_proc_at_index(index);
 
 	if (entry->key_active) {
-		if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
+		if ((mem_entry[index].active =
+		     create_lock(entry->key_active, 0)) == -1) {
 			print(LOG_ERR, "Unable to create active lock\n");
 			return 0;
 		}
 		if (try_lock1(mem_entry[index].active)) {
-			if (!memcmp(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE)) {
-				print(LOG_DEBUG, "Index %d is occupied by %s and active\n", index, entry->proc_name);
+			if (!memcmp
+			    (mem_entry[index].proc_name, entry->proc_name,
+			     PROC_NAME_SIZE)) {
+				print(LOG_DEBUG,
+				      "Index %d is occupied by %s and active\n",
+				      index, entry->proc_name);
 			} else {
-				print(LOG_DEBUG, "Index %d is occupied by %s, cache is however outdated\n", index, entry->proc_name);
+				print(LOG_DEBUG,
+				      "Index %d is occupied by %s, cache is however outdated\n",
+				      index, entry->proc_name);
 				update_cache(index, entry);
 			}
 			return 1;
 		} else {
-			print(LOG_DEBUG, "Index %d has been active but isn't any more, reset key_active\n", index);
+			print(LOG_DEBUG,
+			      "Index %d has been active but isn't any more, reset key_active\n",
+			      index);
 			free_index(index);
 		}
 	} else {
@@ -260,20 +269,23 @@ static int get_first_free(void)
 	return -1;
 }
 
-static int update_cache(int index, proc_entry *entry)
+static int update_cache(int index, proc_entry * entry)
 {
 	int mode = 0;
-	print(LOG_INFO, "Updating cache for %s at index %d\n", entry->proc_name, index);
+	print(LOG_INFO, "Updating cache for %s at index %d\n", entry->proc_name,
+	      index);
 	if ((mem_entry[index].rlock = create_lock(entry->key_rlock, 0)) == -1) {
 		print(LOG_ERR, "Unable to create rlock\n");
 		return -1;
 	}
-	print(LOG_DEBUG, "Mapping write lock for %s at index %d\n", entry->proc_name, index);
+	print(LOG_DEBUG, "Mapping write lock for %s at index %d\n",
+	      entry->proc_name, index);
 	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 0)) == -1) {
 		print(LOG_ERR, "Unable to create wlock\n");
 		return -1;
 	}
-	if ((mem_entry[index].shm = (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
+	if ((mem_entry[index].shm =
+	     (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
 		print(LOG_ERR, "Unable to map shmc\n");
 		return -1;
 	}
@@ -300,7 +312,7 @@ static int seize_index(int index, int size, char *proc)
 	entry->sent = 0;
 	entry->received = 0;
 	my_index = index;
-	
+
 	/* map up the cache (mem_entry) */
 	if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
 		return -1;
@@ -315,7 +327,8 @@ static int seize_index(int index, int size, char *proc)
 	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 1)) == -1) {
 		return -1;
 	}
-	if ((mem_entry[index].shm = (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
+	if ((mem_entry[index].shm =
+	     (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
 		return -1;
 	}
 	strncpy(entry->proc_name, proc, PROC_NAME_SIZE - 1);
@@ -442,7 +455,7 @@ static int chase_semop_error(int err)
 		print(LOG_DEBUG,
 		      "While  blocked in this system call, the process caught a signal;\n"
 		      "see signal(7).\n");
-		/*retvalue = -1;*/
+		/*retvalue = -1; */
 		break;
 
 	case EINVAL:
@@ -483,7 +496,8 @@ static int create_lock(int key, int value)
 	print(LOG_INFO, "Create_lock key=%d, value=%d\n", key, value);
 	if ((sem = semget(key, 1, IPC_EXCL | IPC_CREAT | 0666)) == -1) {
 		if (!chase_semget_error(errno)) {	/* true if retvalue EEXIST */
-			print(LOG_DEBUG, "Create_lock Key=%d already open\n", key);
+			print(LOG_DEBUG, "Create_lock Key=%d already open\n",
+			      key);
 			if ((sem = semget(key, 1, IPC_CREAT | 0666)) == -1) {
 				print(LOG_ERR,
 				      "Unable to create semaphore (%m)\n");
@@ -596,7 +610,6 @@ static void init_mem_proc(void)
 		mem_entry[i].active = 0;
 	}
 }
-
 
 static int start_listen_thread(void)
 {
@@ -748,7 +761,8 @@ int init_memshare(char *proc_name, int size, int qsize)
 {
 	int ctrl_mode = 1;
 	int retvalue = 0, index;
-	print(LOG_INFO, "Init_memshare start for %s with size %d\n", proc_name, size);
+	print(LOG_INFO, "Init_memshare start for %s with size %d\n", proc_name,
+	      size);
 
 	if (initialized)
 		return 1;
@@ -757,7 +771,7 @@ int init_memshare(char *proc_name, int size, int qsize)
 		return 2;
 
 	memset(my_proc, 0, PROC_NAME_SIZE);
-	strncpy(my_proc, proc_name, PROC_NAME_SIZE-1);
+	strncpy(my_proc, proc_name, PROC_NAME_SIZE - 1);
 
 	/* If I don't set a qsize I'm considered to be a send proc only */
 	if (size)
@@ -774,41 +788,47 @@ int init_memshare(char *proc_name, int size, int qsize)
 	/* start off by locking the ctrl lock */
 	if ((lock_ctrl_sem = create_lock(SEM_CTRL_KEY, 1)) == -1) {
 		print(LOG_ERR, "Unable to create ctrl lock\n");
-		return 1;
+		return 3;
 	}
 
-	while (lock(lock_ctrl_sem) < 0);
+	while (lock(lock_ctrl_sem) < 0) ;
 
 	/* map up the ctrl area */
 	if ((shm_ctrl_ptr = get_shm(SHM_CTRL_KEY, CTRL_SIZE, &ctrl_mode)) == 0) {
 		print(LOG_ERR, "Unable to alloc shared mem\n");
-		while (unlock(lock_ctrl_sem) < 0);
-		return 3;
+		while (unlock(lock_ctrl_sem) < 0) ;
+		return 6;
 	}
-	
+
 	if (get_index_for_proc(my_proc) != -1) {
 		print(LOG_ERR, "Procname %s already exists\n", my_proc);
-		exit(2);
+		while (unlock(lock_ctrl_sem) < 0) ;
+		return 4;
 	}
-	index = get_first_free();
-	print(LOG_DEBUG, "Next free index is %d\n", index);
-	
-	if (!send_only) {
-		retvalue = seize_index(index, size, my_proc);
 
-		if (retvalue == 1) {
-			while (unlock(lock_ctrl_sem) < 0);
+	print(LOG_DEBUG, "Next free index is %d\n", index);
+
+	if (!send_only) {
+
+		if ((index = get_first_free()) < 0) {
+			while (unlock(lock_ctrl_sem) < 0) ;
+			print(LOG_ERR, "Max num of processes registered\n");
 			return 4;
 		}
-		if (retvalue == 2) {
-			while (unlock(lock_ctrl_sem) < 0);
-			return 5;
+
+		print(LOG_DEBUG, "Next free index is %d\n", index);
+
+		retvalue = seize_index(index, size, my_proc);
+
+		if (retvalue == -1) {
+			while (unlock(lock_ctrl_sem) < 0) ;
+			return 6;
 		}
 	} else {
 		print(LOG_INFO, "%s is a send only proc\n", my_proc);
 	}
 
-	while (unlock(lock_ctrl_sem) < 0);
+	while (unlock(lock_ctrl_sem) < 0) ;
 
 	if (!send_only)
 		start_listen_thread();
@@ -832,7 +852,7 @@ int data(char *proc, char *data, int len)
 	}
 
 	print(LOG_DEBUG, "Sending data to %s at index %d\n", proc, index);
-	while (lock(mem_entry[index].wlock) < 0);
+	while (lock(mem_entry[index].wlock) < 0) ;
 	hdr.msg_type = DATA;
 	hdr.msg_len = len;
 	hdr.seq = sequence++;
@@ -841,7 +861,7 @@ int data(char *proc, char *data, int len)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), data, len);
 	if (!send_only)
 		inc_sent();
-	while (unlock(mem_entry[index].rlock) < 0);
+	while (unlock(mem_entry[index].rlock) < 0) ;
 	return 0;
 }
 
@@ -862,7 +882,7 @@ int signal1(char *proc, int data1)
 	}
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
-	while (lock(mem_entry[index].wlock) < 0);
+	while (lock(mem_entry[index].wlock) < 0) ;
 	print(LOG_DEBUG, "Sent signal to %s at index %d\n", proc, index);
 	hdr.msg_type = SIGNAL1;
 	hdr.msg_len = SIZEOF_SIGNAL;
@@ -873,7 +893,7 @@ int signal1(char *proc, int data1)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), &sig, SIZEOF_SIGNAL);
 	if (!send_only)
 		inc_sent();
-	while (unlock(mem_entry[index].rlock) < 0);
+	while (unlock(mem_entry[index].rlock) < 0) ;
 	return 0;
 }
 
@@ -894,8 +914,8 @@ int signal2(char *proc, int data1, int data2)
 	}
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
-	while (lock(mem_entry[index].wlock) < 0);
-	
+	while (lock(mem_entry[index].wlock) < 0) ;
+
 	hdr.msg_type = SIGNAL2;
 	hdr.msg_len = SIZEOF_SIGNAL;
 	hdr.seq = sequence++;
@@ -906,7 +926,7 @@ int signal2(char *proc, int data1, int data2)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), &sig, SIZEOF_SIGNAL);
 	if (!send_only)
 		inc_sent();
-	while (unlock(mem_entry[index].rlock) < 0);
+	while (unlock(mem_entry[index].rlock) < 0) ;
 	return 0;
 }
 
@@ -927,7 +947,7 @@ int signal3(char *proc, int data1, int data2, int data3)
 	}
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
-	while (lock(mem_entry[index].wlock) < 0);
+	while (lock(mem_entry[index].wlock) < 0) ;
 	hdr.msg_type = SIGNAL3;
 	hdr.msg_len = SIZEOF_SIGNAL;
 	hdr.seq = sequence++;
@@ -939,7 +959,7 @@ int signal3(char *proc, int data1, int data2, int data3)
 	memcpy((mem_entry[index].shm + SIZEOF_HEADER), &sig, SIZEOF_SIGNAL);
 	if (!send_only)
 		inc_sent();
-	while (unlock(mem_entry[index].rlock) < 0);
+	while (unlock(mem_entry[index].rlock) < 0) ;
 	return 0;
 }
 
