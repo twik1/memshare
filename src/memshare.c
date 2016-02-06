@@ -843,7 +843,7 @@ int init_memshare(char *proc_name, int size, int qsize)
 	print(LOG_DEBUG, "Ctrl locked (init) by %s, %d\n\n", proc_name,
 	      lock_ctrl_sem);
 	/*print(LOG_ERR, "%d trylock (init) key=%d, sem=%d\n",
-	      try_lock1(lock_ctrl_sem), SEM_CTRL_KEY, lock_ctrl_sem);*/
+	   try_lock1(lock_ctrl_sem), SEM_CTRL_KEY, lock_ctrl_sem); */
 
 	/* map up the ctrl area */
 	if ((shm_ctrl_ptr = get_shm(SHM_CTRL_KEY, CTRL_SIZE, &ctrl_mode)) == 0) {
@@ -901,10 +901,12 @@ int data(char *proc, char *data, int len)
 	while (lock(lock_ctrl_sem) < 0) ;
 	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
 	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
-	      lock_ctrl_sem);*/
+	   lock_ctrl_sem); */
 
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
+		print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+		while (unlock(lock_ctrl_sem) < 0) ;
 		return 1;
 	}
 
@@ -913,6 +915,7 @@ int data(char *proc, char *data, int len)
 
 	print(LOG_DEBUG, "Sending data to %s at index %d\n", proc, index);
 	while (lock(mem_entry[index].wlock) < 0) ;
+
 	hdr.msg_type = DATA;
 	hdr.msg_len = len;
 	hdr.seq = sequence++;
@@ -940,10 +943,12 @@ int signal1(char *proc, int data1)
 	while (lock(lock_ctrl_sem) < 0) ;
 	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
 	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
-	      lock_ctrl_sem);*/
+	   lock_ctrl_sem); */
 
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
+		print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+		while (unlock(lock_ctrl_sem) < 0) ;
 		return 1;
 	}
 
@@ -981,10 +986,12 @@ int signal2(char *proc, int data1, int data2)
 	while (lock(lock_ctrl_sem) < 0) ;
 	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
 	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
-	      lock_ctrl_sem);*/
+	   lock_ctrl_sem); */
 
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
+		print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+		while (unlock(lock_ctrl_sem) < 0) ;
 		return 1;
 	}
 
@@ -1023,10 +1030,12 @@ int signal3(char *proc, int data1, int data2, int data3)
 	while (lock(lock_ctrl_sem) < 0) ;
 	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
 	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
-	      lock_ctrl_sem);*/
+	   lock_ctrl_sem); */
 
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
+		print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+		while (unlock(lock_ctrl_sem) < 0) ;
 		return 1;
 	}
 
@@ -1035,6 +1044,7 @@ int signal3(char *proc, int data1, int data2, int data3)
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
 	while (lock(mem_entry[index].wlock) < 0) ;
+
 	hdr.msg_type = SIGNAL3;
 	hdr.msg_len = SIZEOF_SIGNAL;
 	hdr.seq = sequence++;
