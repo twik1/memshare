@@ -22,7 +22,8 @@
 #include <unistd.h>
 #include <stdio.h>
 
-void printemall(void) {
+void printemall(void)
+{
 	tsyslog(LOG_DEBUG, "Detta är en debug utskrift\n");
 	tsyslog(LOG_INFO, "Detta är en info utskrift\n");
 	tsyslog(LOG_NOTICE, "Detta är en notice utskrift\n");
@@ -31,12 +32,12 @@ void printemall(void) {
 	tsyslog(LOG_CRIT, "Detta är en critical utskrift\n");
 	tsyslog(LOG_ALERT, "Detta är en alert utskrift\n");
 	tsyslog(LOG_EMERG, "Detta är en emergency utskrift\n");
-}	
+}
 
 int main(int argc, char *argv[])
 {
-	int retvalue;
-	printemall(); /* Nothing will show up since tsyslog isn't initialized */
+	int retvalue, old_tprio;
+	printemall();		/* Nothing will show up since tsyslog isn't initialized */
 
 	/* You could either initalize like this, together with a prio */
 	if ((retvalue = tsyslog_prio_init("logtest", 3)) != 0) {
@@ -58,27 +59,37 @@ int main(int argc, char *argv[])
  *	}
  */
 
-	printemall(); /* This will print emergancy och alert logs */
+	printemall();		/* This will print emergency och alert logs */
 
 	/* Add also the critical level logs */
 	if ((retvalue = tsyslog_set(LOG_CRIT)) != 0) {
 		printf("Unable to set priority %d\n", retvalue);
 		exit(1);
 	}
-	
-	printemall(); /* This will print emergancy, alert and critical logs */
+
+	printemall();		/* This will print emergancy, alert and critical logs */
 
 	if ((retvalue = tsyslog_del(LOG_EMERG)) != 0) {
 		printf("Unable to del priority %d\n", retvalue);
 		exit(1);
 	}
-	
-	printemall(); /* This will print alert and critical logs */
-	
+
+	printemall();		/* This will print alert and critical logs */
+
+	old_tprio = LOG_EMERG;	/* Entering manual test */
+
 /* 	
  *  to change loglevel from outside the process use memsend
  *  as described in tlog_api.h
  */
-	
-	return(0);
+
+	while (1) {
+		if (tsyslog_get() != old_tprio) {
+			printemall();
+			old_tprio = tsyslog_get();
+		}
+		sleep(3);
+	}
+
+	return (0);
 }

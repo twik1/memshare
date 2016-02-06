@@ -83,6 +83,16 @@ int tsyslog_del(int);
 int tsyslog_replace(int);
 
 /*****************************************************************************/
+/* Function Name      : tsyslog_get                                          */
+/* Description        : Get current priority mask for syslog output          */
+/* Input(s)           : None.                                                */
+/* Output(s)          : None.                                                */
+/* Return Value(s)    : 0 ok                                                 */
+/*                    : > 255 it has to be initalized first                  */
+/*****************************************************************************/
+int tsyslog_get(void);
+
+/*****************************************************************************/
 /*                                                                           */
 /* Set priority bit      :   memsend -s2 <process > 1 <priority>             */
 /* Del priority bit      :   memsend -s2 <process > 2 <priority>             */

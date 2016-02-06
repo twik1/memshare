@@ -105,6 +105,13 @@ int tsyslog_replace(int value)
 	return 0;
 }
 
+int tsyslog_get(void)
+{
+	if (!t_init)
+		return 256;
+	return tlog_mask;
+}
+
 /* internal function to be passed to memshare */
 static void _tsyslog(int priority, const char *fmt, ...)
 {
