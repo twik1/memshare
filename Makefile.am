@@ -1,4 +1,5 @@
-AM_CPPFLAGS = -I$(top_srcdir)/src -Wall -pthread
+AM_CPPFLAGS = -I$(top_srcdir)/src -Wall -g3 -O0
+AM_CFLAGS = -I$(top_srcdir)/src -Wall -g3 -O0
 AM_LDFLAGS = -pthread
 
 AUTOMAKE_OPTIONS = subdir-objects
@@ -14,16 +15,20 @@ memwatch_LDADD = libmemshare.la
 endif
 
 if MEMTEST
-basetest_SOURCES = src/test/testmain.c
-basetest_LDADD = libmemshare.la
-reply_SOURCES = src/test/reply.c
-reply_LDADD = libmemshare.la
-listen_SOURCES = src/test/listen.c
-listen_LDADD = libmemshare.la
+#basetest_SOURCES = src/test/testmain.c
+#basetest_LDADD = libmemshare.la
+#reply_SOURCES = src/test/reply.c
+#reply_LDADD = libmemshare.la
+replyer_SOURCES = src/test/replyer.c
+replyer_LDADD = libmemshare.la
+#listen_SOURCES = src/test/listen.c
+#listen_LDADD = libmemshare.la
 tlogtest_SOURCES = src/examples/tlogmain.c
 tlogtest_LDADD = libtlog.la
+monitor_SOURCES = src/test/monitor.c
+monitor_LDADD = libmemshare.la
 
-noinst_PROGRAMS = basetest reply listen tlogtest
+noinst_PROGRAMS = tlogtest monitor replyer
 endif
 
 lib_LTLIBRARIES = libmemshare.la

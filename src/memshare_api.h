@@ -15,7 +15,7 @@ typedef void (*callback_data) (char *, char *, int);
 typedef void (*callback_extlog) (int, const char *, ...);
 
 #define PROC_NAME_SIZE 20
-
+int print(int level, const char *format, ...);
 
 /*****************************************************************************/
 /* Function Name      : add_log_function                                     */
@@ -25,7 +25,6 @@ typedef void (*callback_extlog) (int, const char *, ...);
 /* Return Value(s)    : None.                                                */
 /*****************************************************************************/
 void logfunction_register(callback_extlog);
-
 
 /*****************************************************************************/
 /* Function Name      : set_print_level                                      */

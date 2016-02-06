@@ -63,9 +63,7 @@ static void init_mem_proc(void);
 static int clear_shm(int key, int size);
 static char *get_shm(int key, int size, int *mode);
 
-static proc_entry *get_proc_at(int index);
 static int free_index(int index);
-static int print(int level, const char *format, ...);
 static int inc_sent(void);
 static int inc_received(void);
 static int destroy_lock(int);
@@ -77,10 +75,11 @@ callback_3 callback3 = NULL;
 callback_data callbackdata = NULL;
 callback_extlog callbackextlog = NULL;
 
-int current_level = LOG_ERR;
+int current_level = LOG_WARNING;
 
 /* print functions either printf or user specific */
-static int print(int level, const char *format, ...)
+/*static int print(int level, const char *format, ...)*/
+int print(int level, const char *format, ...)
 {
 	va_list ap;
 	int retval = 0;
@@ -210,13 +209,34 @@ static proc_entry *get_proc_at_index(int index)
 int check_proc_at_index(int index)
 {
 	proc_entry *entry = get_proc_at_index(index);
+	int sem;
 
+	/* Check if this entry has ever been seized or not */
 	if (entry->key_active) {
-		if ((mem_entry[index].active =
-		     create_lock(entry->key_active, 0)) == -1) {
-			print(LOG_ERR, "Unable to create active lock\n");
+		print(LOG_DEBUG, "key_active for index %d\n", index);
+		/* get sem for the key */
+		if ((sem = create_lock(entry->key_active, 0)) == -1) {
+			print(LOG_ERR,
+			      "Unable to create active lock in check_proc_at_index for key %d\n",
+			      entry->key_active);
 			return 0;
 		}
+		/* check if cache is updated with sem */
+		if (mem_entry[index].active) {
+			/* check if cache contains correct sem for the key */
+			if (sem != mem_entry[index].active) {
+				print(LOG_DEBUG,
+				      "Cache and sem for key %d doesn't match, updating cache\n",
+				      entry->key_active);
+				update_cache(index, entry);
+				/*mem_entry[index].active = sem; */
+			}
+		} else {
+			print(LOG_DEBUG, "Cache empty update sem from key\n");
+			/*mem_entry[index].active = sem; */
+			update_cache(index, entry);
+		}
+		/* use sem in cache to check if active */
 		if (try_lock1(mem_entry[index].active)) {
 			if (!memcmp
 			    (mem_entry[index].proc_name, entry->proc_name,
@@ -238,7 +258,8 @@ int check_proc_at_index(int index)
 			free_index(index);
 		}
 	} else {
-		print(LOG_DEBUG, "Index %d has never been active\n", index);
+		print(LOG_DEBUG,
+		      "Index %d has never been active (or released)\n", index);
 	}
 	return 0;
 }
@@ -278,17 +299,26 @@ static int update_cache(int index, proc_entry * entry)
 		print(LOG_ERR, "Unable to create rlock\n");
 		return -1;
 	}
-	print(LOG_DEBUG, "Mapping write lock for %s at index %d\n",
-	      entry->proc_name, index);
+	print(LOG_INFO, "Cache rlock for %s at index %d, key %d, sem %d\n",
+	      entry->proc_name, index, entry->key_rlock,
+	      mem_entry[index].rlock);
+
 	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 0)) == -1) {
 		print(LOG_ERR, "Unable to create wlock\n");
 		return -1;
 	}
+	print(LOG_INFO, "Cache wlock for %s at index %d, key %d, sem %d\n",
+	      entry->proc_name, index, entry->key_wlock,
+	      mem_entry[index].wlock);
+
 	if ((mem_entry[index].shm =
 	     (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
 		print(LOG_ERR, "Unable to map shmc\n");
 		return -1;
 	}
+	print(LOG_INFO, "Cache shm for %s at index %d, key %d, sem &p\n",
+	      entry->proc_name, index, entry->key_shm, mem_entry[index].shm);
+
 	if ((mem_entry[index].active = create_lock(entry->key_active, 0)) == -1) {
 		print(LOG_ERR, "Unable to create  active lock\n");
 		return -1;
@@ -321,26 +351,40 @@ static int seize_index(int index, int size, char *proc)
 	if (set_active(mem_entry[index].active)) {
 		return -1;
 	}
+
+	strncpy(entry->proc_name, proc, PROC_NAME_SIZE - 1);
+	memcpy(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE);
+
 	if ((mem_entry[index].rlock = create_lock(entry->key_rlock, 0)) == -1) {
 		return -1;
 	}
+	print(LOG_INFO, "Seize rlock for %s at index %d, key %d, sem %d\n",
+	      entry->proc_name, index, entry->key_rlock,
+	      mem_entry[index].rlock);
+
 	if ((mem_entry[index].wlock = create_lock(entry->key_wlock, 1)) == -1) {
 		return -1;
 	}
+	print(LOG_INFO, "Seize wlock for %s at index %d, key %d, sem %d\n",
+	      entry->proc_name, index, entry->key_wlock,
+	      mem_entry[index].wlock);
+
 	if ((mem_entry[index].shm =
 	     (char *)get_shm(entry->key_shm, entry->size_shm, &mode)) == 0) {
 		return -1;
 	}
-	strncpy(entry->proc_name, proc, PROC_NAME_SIZE - 1);
-	memcpy(mem_entry[index].proc_name, entry->proc_name, PROC_NAME_SIZE);
+	print(LOG_INFO, "Seize shm for %s at index %d, key %d, sem %p\n",
+	      entry->proc_name, index, entry->key_shm, mem_entry[index].shm);
+
 	return 0;
 }
 
 static int free_index(int index)
 {
 	proc_entry *entry;
-	print(LOG_INFO, "Remove proc from entry and cache\n");
 	entry = (proc_entry *) get_proc_at_index(index);
+	print(LOG_INFO, "Remove proc %s from index %d\n", entry->proc_name,
+	      index);
 	clear_shm(entry->key_shm, entry->size_shm);
 	entry->key_shm = 0;
 	entry->size_shm = 0;
@@ -410,7 +454,7 @@ static int chase_semget_error(int err)
 	return retvalue;
 }
 
-static int chase_semop_error(int err)
+static int chase_semop_error(int err, int sem, int what)
 {
 	int retvalue = 0;
 	switch (err) {
@@ -428,10 +472,10 @@ static int chase_semop_error(int err)
 		break;
 
 	case EAGAIN:
-		print(LOG_DEBUG,
-		      "An operation could not proceed immediately and either IPC_NOWAIT\n"
-		      "was specified in sem_flg or the time limit specified in  timeout\n"
-		      "expired.\n");
+		/*print(LOG_ERR,
+		   "An operation could not proceed immediately and either IPC_NOWAIT\n"
+		   "was specified in sem_flg or the time limit specified in  timeout\n"
+		   "expired.\n"); */
 		retvalue = -1;
 		break;
 
@@ -448,14 +492,16 @@ static int chase_semop_error(int err)
 		break;
 
 	case EIDRM:
-		print(LOG_ERR, "The semaphore set was removed.\n");
+		print(LOG_ERR,
+		      "The semaphore set was removed. sem %d, from %d\n", sem,
+		      what);
 		break;
 
 	case EINTR:
 		print(LOG_DEBUG,
 		      "While  blocked in this system call, the process caught a signal;\n"
 		      "see signal(7).\n");
-		/*retvalue = -1; */
+		retvalue = -1;
 		break;
 
 	case EINVAL:
@@ -541,9 +587,10 @@ static int lock(int sem)
 	op[0].sem_num = 0;
 	op[0].sem_op = -1;
 	op[0].sem_flg = SEM_UNDO;
-	if (semop(sem, op, 1))
-		retvalue = chase_semop_error(errno);
-	print(LOG_DEBUG, "retvalue %d\n", retvalue);
+	if (semop(sem, op, 1)) {
+		retvalue = chase_semop_error(errno, sem, 1);
+		print(LOG_DEBUG, "semop release err %d\n", retvalue);
+	}
 	return retvalue;
 }
 
@@ -553,9 +600,9 @@ static int unlock(int sem)
 	struct sembuf op[1];
 	op[0].sem_num = 0;
 	op[0].sem_op = 1;
-	op[0].sem_flg = 0;
+	op[0].sem_flg = SEM_UNDO;
 	if (semop(sem, op, 1))
-		retvalue = chase_semop_error(errno);
+		retvalue = chase_semop_error(errno, sem, 2);
 	return retvalue;
 }
 
@@ -567,7 +614,7 @@ static int set_active(int sem)
 	op[0].sem_op = 1;
 	op[0].sem_flg = SEM_UNDO;
 	if (semop(sem, op, 1))
-		retvalue = chase_semop_error(errno);
+		retvalue = chase_semop_error(errno, sem, 3);
 	return retvalue;
 }
 
@@ -592,8 +639,9 @@ static int try_lock1(int sem)
 	op[0].sem_op = 0;
 	op[0].sem_flg = IPC_NOWAIT;
 	if (semop(sem, op, 1)) {
-		if (chase_semop_error(errno))
+		if (chase_semop_error(errno, sem, 4)) {
 			retvalue = 1;
+		}
 	}
 	return retvalue;
 }
@@ -792,6 +840,10 @@ int init_memshare(char *proc_name, int size, int qsize)
 	}
 
 	while (lock(lock_ctrl_sem) < 0) ;
+	print(LOG_DEBUG, "Ctrl locked (init) by %s, %d\n\n", proc_name,
+	      lock_ctrl_sem);
+	/*print(LOG_ERR, "%d trylock (init) key=%d, sem=%d\n",
+	      try_lock1(lock_ctrl_sem), SEM_CTRL_KEY, lock_ctrl_sem);*/
 
 	/* map up the ctrl area */
 	if ((shm_ctrl_ptr = get_shm(SHM_CTRL_KEY, CTRL_SIZE, &ctrl_mode)) == 0) {
@@ -805,8 +857,6 @@ int init_memshare(char *proc_name, int size, int qsize)
 		while (unlock(lock_ctrl_sem) < 0) ;
 		return 4;
 	}
-
-	print(LOG_DEBUG, "Next free index is %d\n", index);
 
 	if (!send_only) {
 
@@ -828,6 +878,7 @@ int init_memshare(char *proc_name, int size, int qsize)
 		print(LOG_INFO, "%s is a send only proc\n", my_proc);
 	}
 
+	print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", proc_name);
 	while (unlock(lock_ctrl_sem) < 0) ;
 
 	if (!send_only)
@@ -846,10 +897,19 @@ int data(char *proc, char *data, int len)
 
 	if (!initialized)
 		return 2;
+
+	while (lock(lock_ctrl_sem) < 0) ;
+	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
+	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
+	      lock_ctrl_sem);*/
+
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
+
+	print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+	while (unlock(lock_ctrl_sem) < 0) ;
 
 	print(LOG_DEBUG, "Sending data to %s at index %d\n", proc, index);
 	while (lock(mem_entry[index].wlock) < 0) ;
@@ -876,10 +936,19 @@ int signal1(char *proc, int data1)
 
 	if (!initialized)
 		return 2;
+
+	while (lock(lock_ctrl_sem) < 0) ;
+	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
+	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
+	      lock_ctrl_sem);*/
+
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
+
+	print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+	while (unlock(lock_ctrl_sem) < 0) ;
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
 	while (lock(mem_entry[index].wlock) < 0) ;
@@ -908,10 +977,19 @@ int signal2(char *proc, int data1, int data2)
 
 	if (!initialized)
 		return 2;
+
+	while (lock(lock_ctrl_sem) < 0) ;
+	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
+	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
+	      lock_ctrl_sem);*/
+
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
+
+	print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+	while (unlock(lock_ctrl_sem) < 0) ;
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
 	while (lock(mem_entry[index].wlock) < 0) ;
@@ -941,10 +1019,19 @@ int signal3(char *proc, int data1, int data2, int data3)
 
 	if (!initialized)
 		return 2;
+
+	while (lock(lock_ctrl_sem) < 0) ;
+	print(LOG_DEBUG, "Ctrl locked by %s\n\n", my_proc);
+	/*print(LOG_DEBUG, "%d trylock %d\n", try_lock1(lock_ctrl_sem),
+	      lock_ctrl_sem);*/
+
 	if ((index = get_index_for_proc(proc)) < 0) {
 		print(LOG_NOTICE, "No such process %s\n", proc);
 		return 1;
 	}
+
+	print(LOG_DEBUG, "Ctrl unlocked by %s\n\n", my_proc);
+	while (unlock(lock_ctrl_sem) < 0) ;
 
 	print(LOG_DEBUG, "Sending signal to %s at index %d\n", proc, index);
 	while (lock(mem_entry[index].wlock) < 0) ;
